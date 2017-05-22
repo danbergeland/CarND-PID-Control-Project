@@ -41,6 +41,18 @@ public:
   * Calculate the total PID error.
   */
   double TotalError();
+  
+
+private:
+  /*
+   * Store cte from previous function call
+   */
+  double cte_last;
+  /*
+   * Accumulate integral approximation
+   */
+  double cte_integral;
+  
 };
 
 #endif /* PID_H */

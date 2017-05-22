@@ -3,6 +3,9 @@
 #include "json.hpp"
 #include "PID.h"
 #include <math.h>
+#include "twiddle.h"
+
+//#define TWIDDLE_ENABLE
 
 // for convenience
 using json = nlohmann::json;
@@ -11,6 +14,12 @@ using json = nlohmann::json;
 constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
+
+// Twiddle from .2, .004, 2 = > .2108, .00679, 2.328 at .35 throttle
+// Twiddle from .2108, .00679, 2.328 = > .179, .00779, 2.428 at .5 throttle
+double Kp = .179;
+double Ki = .00779;
+double Kd = 2.428;
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -33,12 +42,18 @@ int main()
   uWS::Hub h;
 
   PID pid;
-  // TODO: Initialize the pid variable.
+  
+  twiddle tw;
+  
+  pid.Init(Kp,Ki,Kd);
+  
+  tw.set_PID_coeffs(Kp,Ki,Kd);
 
-  h.onMessage([&pid](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
+  h.onMessage([&pid,&tw](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
+    
     if (length && length > 2 && data[0] == '4' && data[1] == '2')
     {
       auto s = hasData(std::string(data).substr(0, length));
@@ -51,19 +66,37 @@ int main()
           double speed = std::stod(j[1]["speed"].get<std::string>());
           double angle = std::stod(j[1]["steering_angle"].get<std::string>());
           double steer_value;
-          /*
-          * TODO: Calcuate steering value here, remember the steering value is
-          * [-1, 1].
-          * NOTE: Feel free to play around with the throttle and speed. Maybe use
-          * another PID controller to control the speed!
-          */
+
+          pid.UpdateError(cte);
+          steer_value = pid.TotalError();
           
+          //limit steering values to +/- 1
+          if(steer_value>1){steer_value=1;}
+          if(steer_value<-1){steer_value=-1;}
+          
+          //slow down as max_CTE increases
+          double max_CTE = 2.5;
+          double max_throttle = .5;
+          double throttle = max_throttle*(max_CTE-fabs(cte))/max_CTE;
+          //Can't have negative throttle, also the car would not move if 0 throttle.
+          if(throttle<0.1) throttle = 0.1;
+          
+#ifdef TWIDDLE_ENABLE
+          tw.updateError(cte);          
+          if(tw.get_update_count()>1200)
+          {
+            std::vector<double> newParams= tw.twiddle_PID_coeffs();
+            pid.Init(newParams[0],newParams[1],newParams[2]);
+            
+            std::cout << "\n\n\n\n\nNEW PID PARAMS: P:"<<newParams[0]<<" I:"<<newParams[1]<<" D:"<<newParams[2]<<"\n\n\n\n";
+          }
+#endif
           // DEBUG
           std::cout << "CTE: " << cte << " Steering Value: " << steer_value << std::endl;
 
           json msgJson;
           msgJson["steering_angle"] = steer_value;
-          msgJson["throttle"] = 0.3;
+          msgJson["throttle"] = throttle;
           auto msg = "42[\"steer\"," + msgJson.dump() + "]";
           std::cout << msg << std::endl;
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
@@ -74,6 +107,7 @@ int main()
         ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
       }
     }
+    
   });
 
   // We don't need this since we're not using HTTP but if it's removed the program
@@ -107,8 +141,10 @@ int main()
   }
   else
   {
+
     std::cerr << "Failed to listen to port" << std::endl;
     return -1;
   }
+  
   h.run();
 }
